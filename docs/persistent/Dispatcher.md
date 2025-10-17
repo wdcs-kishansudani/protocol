@@ -416,7 +416,7 @@ function setMigrationTimelock(uint256 _nextTimelock) external override onlyOwner
 function __isContract(address _who) private view returns (bool isContract_) {
     // 1. Declare a variable to hold the size of the code at the address.
     uint256 size;
-    // 2. Use inline assembly to access the `extcodesize` opcode, which returns the size of the code at a given address.
+    // 2. Use inline assembly to access the `extcodesde` opcode, which returns the size of the code at a given address.
     assembly {
         size := extcodesize(_who)
     }
@@ -529,7 +529,19 @@ function __migrationOutHookFailureReasonPrefix(IMigrationHookHandler.MigrationOu
     return "";
 }
 ```
-
 ---
 ## Mermaid Diagram
-(Diagram is complete from previous version)
+
+```mermaid
+graph TD
+    subgraph Persistent Layer
+        A[Owner] -- manages --> B(Dispatcher);
+        B -- deploys --> C{VaultProxy};
+    end
+
+    subgraph Release Layer
+        D[Current FundDeployer] -- creates funds via --> B;
+        E[Previous FundDeployer] -- migrates funds to --> D;
+        C -- managed by --> D;
+    end
+```

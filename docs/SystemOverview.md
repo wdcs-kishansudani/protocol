@@ -61,47 +61,111 @@ This two-layer design provides a powerful combination of stability (the Persiste
 
 ---
 
-## Fund Creation Flow: Step-by-Step
+## Fund Creation Flow: A Detailed, Step-by-Step Walkthrough
 
-Creating a new fund is a sophisticated process that involves a coordinated "dance" between the Release Layer and the Persistent Layer. Here is a step-by-step walkthrough of what happens when a user calls `createNewFund` on the `FundDeployer`.
+The following diagram and description provide a comprehensive, in-depth view of the entire fund creation process.
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant FundDeployer
-    participant ComptrollerProxy
+    participant FundDeployer as FD
+    participant ComptrollerProxy as CP
+    participant ComptrollerLib as CLib
     participant Dispatcher
-    participant VaultProxy
-    participant Extensions
+    participant VaultProxy as VP
+    participant VaultLib
+    participant Extensions as Ext
 
-    User->>FundDeployer: createNewFund(...)
-    FundDeployer->>ComptrollerProxy: deploy() & init()
-    FundDeployer->>Dispatcher: deployVaultProxy(ComptrollerProxy address)
-    Dispatcher->>VaultProxy: deploy() & init()
-    FundDeployer->>ComptrollerProxy: setVaultProxy(VaultProxy address)
-    FundDeployer->>Extensions: setConfigForFund(...)
-    FundDeployer->>ComptrollerProxy: activate()
+    User->>FD: createNewFund(...)
+
+    FD->>+CP: new ComptrollerProxy(constructData, CLib address)
+    CP->>+CLib: delegatecall(init(...))
+    CLib-->>-CP: returns
+    CP-->>-FD: returns new CP address
+
+    FD->>+Dispatcher: deployVaultProxy(VP Lib address, owner, CP address, name)
+    Dispatcher->>+VP: new VaultProxy(constructData, VP Lib address)
+    VP->>+VaultLib: delegatecall(init(owner, CP address, name))
+    Note right of VaultLib: storage on VP: accessor = CP address
+    VaultLib-->>-VP: returns
+    VP-->>-Dispatcher: returns new VP address
+    Dispatcher-->>-FD: returns new VP address
+
+    FD->>+CP: setVaultProxy(VP address)
+    CP->>+CLib: delegatecall(setVaultProxy(...))
+    Note right of CLib: storage on CP: vaultProxy = VP address
+    CLib-->>-CP: returns
+    CP-->>-FD: returns
+
+    FD->>+Ext: setConfigForFund(CP address, VP address, feeData)
+    Ext-->>-FD: returns
+
+    FD->>+CP: activate(isMigration=false)
+    CP->>+CLib: delegatecall(activate(...))
+    CLib->>VP: addTrackedAsset(denomination)
+    CLib->>Ext: activateForFund()
+    CLib-->>-CP: returns
+    CP-->>-FD: returns
+
+    FD->>FD: initializeForVault(VP address)
+
 ```
 
-1.  **`FundDeployer`: Deploy `ComptrollerProxy`**
-    -   The `FundDeployer` first deploys a new, unique `ComptrollerProxy` for the fund.
-    -   During its construction, the `ComptrollerProxy` is linked to the shared `ComptrollerLib` for this release.
-    -   The `init` function of the `ComptrollerProxy` is called, setting its core configuration like the denomination asset and shares action timelock.
+**Initial Call:** `FundDeployer.createNewFund()`
 
-2.  **`FundDeployer` -> `Dispatcher`: Deploy `VaultProxy`**
-    -   The `FundDeployer` then calls the `deployVaultProxy` function on the `Dispatcher`.
-    -   The `Dispatcher`, as the single trusted factory, deploys the new `VaultProxy` contract. This is the contract that will hold all the fund's assets.
-    -   Crucially, during its construction, the `VaultProxy`'s `init` function is called, which permanently sets its `accessor` to the address of the `ComptrollerProxy` created in Step 1. This establishes the critical security link: only this `ComptrollerProxy` can control the `VaultProxy`.
+-   **User Input:** The user provides the fund owner's address, a name and symbol for the fund's shares, the denomination asset, a shares action timelock, and encoded configuration data for fees and policies.
+-   **Initial Check:** The `onlyLiveRelease` modifier ensures that this `FundDeployer` is the one currently pointed to by the `Dispatcher`.
 
-3.  **`FundDeployer`: Link Proxies and Configure**
-    -   The `FundDeployer` calls `setVaultProxy` on the new `ComptrollerProxy` to make it aware of the `VaultProxy` it will be controlling.
-    -   The `FundDeployer` then calls `setConfigForFund` on all the extension contracts (`FeeManager`, `PolicyManager`, etc.), passing in the addresses of the new `ComptrollerProxy` and `VaultProxy`. This registers the new fund with all the necessary components of the release.
+**Step 1: `FundDeployer.__deployComptrollerProxy()`**
 
-4.  **`FundDeployer`: Activate Fund**
-    -   Finally, the `FundDeployer` calls `activate` on the `ComptrollerProxy`.
-    -   The `activate` function performs the final setup, such as adding the denomination asset to the list of tracked assets and calling the `activateForFund` function on the `FeeManager` and `PolicyManager`.
+This private helper function is the first major action.
 
-At the end of this process, a fully configured and secure fund is live and ready to receive investments.
+1.  **Encode `init` data:** The function ABI-encodes a call to the `IComptroller.init` function, passing along the `_denominationAsset` and `_sharesActionTimelock`. This packs the initialization logic for the new proxy into a `bytes` payload.
+2.  **Deploy Proxy:** It deploys a new `ComptrollerProxy` contract.
+3.  **Proxy Construction:** The `ComptrollerProxy`'s constructor immediately makes a `delegatecall` to the release's singleton `ComptrollerLib` address, executing the `init` function with the encoded data. This sets the fund's specific configuration (like its denomination asset) as state variables on the `ComptrollerProxy`'s storage.
+4.  **Return Address:** The function returns the address of the newly deployed and initialized `ComptrollerProxy`.
+
+**Step 2: `FundDeployer.__deployVaultProxy()`**
+
+This private helper function calls the `Dispatcher` to create the fund's asset-holding contract.
+
+1.  **Call `Dispatcher`:** The `FundDeployer` calls `deployVaultProxy` on the `Dispatcher` contract, passing the `_fundOwner`, the address of the `ComptrollerProxy` (as the `_vaultAccessor`), the fund name, and the release's `VaultLib` address.
+2.  **`Dispatcher.deployVaultProxy()`:**
+    -   **Encode `init` data:** The `Dispatcher` ABI-encodes a call to `IMigratableVault.init`, passing the `_owner`, `_vaultAccessor` (the `ComptrollerProxy`), and `_fundName`.
+    -   **Deploy `VaultProxy`:** The `Dispatcher` deploys the new `VaultProxy`. This is a critical security step, as the `Dispatcher` is the single, trusted factory for all asset vaults in the protocol.
+    -   **Proxy Construction & Initialization:** The `VaultProxy`'s constructor immediately makes a `delegatecall` to its `VaultLib`, executing the `init` function. This does two crucial things:
+        -   It sets the `owner` of the fund.
+        -   It permanently sets the `accessor` to the `ComptrollerProxy`'s address. **This is the fundamental security link of the protocol.** From this point forward, the `VaultProxy` will only accept instructions from this specific `ComptrollerProxy`.
+3.  **Return Address:** The `Dispatcher` returns the address of the newly deployed `VaultProxy` to the `FundDeployer`.
+4.  **Set Symbol (Optional):** If a `_fundSymbol` was provided, the `FundDeployer` makes a call to the new `VaultProxy` to set it.
+
+**Step 3: `FundDeployer` links the proxies**
+
+1.  **Call `setVaultProxy`:** The `FundDeployer` calls `setVaultProxy` on the `ComptrollerProxy` deployed in Step 1, passing it the address of the `VaultProxy` from Step 2. This makes the `ComptrollerProxy` aware of the vault it is designated to control.
+
+**Step 4: `FundDeployer.__configureExtensions()`**
+
+This private helper configures all the extensions for the new fund.
+
+1.  **Loop Through Extensions:** The function makes a series of `setConfigForFund` calls to the release's singleton extension contracts (`FeeManager`, `PolicyManager`, `IntegrationManager`, `ExternalPositionManager`).
+2.  **`setConfigForFund` on each Extension:**
+    -   The extension receives the addresses of the new `ComptrollerProxy` and `VaultProxy`.
+    -   It calls `__setValidatedVaultProxy` to cache this link, ensuring it will only accept calls from this `ComptrollerProxy` when acting on behalf of this `VaultProxy`.
+    -   It decodes the specific configuration data (e.g., the `_feeManagerConfigData`) and sets up the fund's specific settings within that extension's storage.
+
+**Step 5: `FundDeployer` activates the fund**
+
+1.  **Call `activate`:** The `FundDeployer` calls `activate` on the `ComptrollerProxy`.
+2.  **`ComptrollerLib.activate()`:**
+    -   The `activate` function on the `ComptrollerLib` is executed via `delegatecall`.
+    -   It instructs the `VaultProxy` to add the `denominationAsset` to its list of tracked assets.
+    -   It then calls `activateForFund` on the `FeeManager` and `PolicyManager`, allowing them to perform any final setup now that the fund is fully configured.
+
+**Step 6: `FundDeployer` initializes the protocol fee tracker**
+
+1.  **Call `initializeForVault`:** The `FundDeployer` calls `initializeForVault` on the release's `ProtocolFeeTracker`, passing in the new `VaultProxy` address. This registers the fund for protocol-level fee collection.
+
+**Final State:** At the end of this process, a fully configured and secure fund is live. The `VaultProxy` holds the assets, the `ComptrollerProxy` holds the configuration and logic pointers, and the two are immutably linked, ensuring that only the designated logic can instruct the vault to perform actions.
 
 ---
 
