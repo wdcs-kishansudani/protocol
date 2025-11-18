@@ -1,73 +1,48 @@
 // SPDX-License-Identifier: GPL-3.0
-
-/*
-    This file is part of the Enzyme Protocol.
-
-    (c) Enzyme Foundation <security@enzyme.finance>
-
-    For the full license information, please view the LICENSE
-    file that was distributed with this source code.
-*/
-
 pragma solidity 0.6.12;
 
-import {AssetHelpers} from "../../../../../../utils/0.6.12/AssetHelpers.sol";
-import {IIntegrationAdapter} from "../../../IIntegrationAdapter.sol";
-import {IntegrationSelectors} from "./../IntegrationSelectors.sol";
+import {IIntegrationManager} from "../../../IIntegrationManager.sol";
 
-/// @title AdapterBase Contract
-/// @author Enzyme Foundation <security@enzyme.finance>
-/// @notice A base contract for integration adapters
-abstract contract AdapterBase is IIntegrationAdapter, IntegrationSelectors, AssetHelpers {
-    address internal immutable INTEGRATION_MANAGER;
+abstract contract AdapterBase {
+    IIntegrationManager internal immutable INTEGRATION_MANAGER;
 
-    /// @dev Provides a standard implementation for transferring incoming assets
-    /// from an adapter to a VaultProxy at the end of an adapter action
-    modifier postActionIncomingAssetsTransferHandler(address _vaultProxy, bytes memory _assetData) {
-        _;
-
-        (,, address[] memory incomingAssets) = __decodeAssetData(_assetData);
-
-        __pushFullAssetBalances(_vaultProxy, incomingAssets);
-    }
-
-    /// @dev Provides a standard implementation for transferring unspent spend assets
-    /// from an adapter to a VaultProxy at the end of an adapter action
-    modifier postActionSpendAssetsTransferHandler(address _vaultProxy, bytes memory _assetData) {
-        _;
-
-        (address[] memory spendAssets,,) = __decodeAssetData(_assetData);
-
-        __pushFullAssetBalances(_vaultProxy, spendAssets);
-    }
+    bytes4 internal constant LEND_SELECTOR = bytes4(keccak256("lend(address,bytes,bytes)"));
+    bytes4 internal constant REDEEM_SELECTOR = bytes4(keccak256("redeem(address,bytes,bytes)"));
 
     modifier onlyIntegrationManager() {
-        require(msg.sender == INTEGRATION_MANAGER, "Only the IntegrationManager can call this function");
+        require(msg.sender == address(INTEGRATION_MANAGER), "Only the IntegrationManager can call this function");
         _;
     }
 
     constructor(address _integrationManager) public {
-        INTEGRATION_MANAGER = _integrationManager;
+        INTEGRATION_MANAGER = IIntegrationManager(_integrationManager);
     }
 
-    // INTERNAL FUNCTIONS
+    function parseAssetsForAction(
+        address,
+        bytes4,
+        bytes calldata
+    )
+        external
+        view
+        virtual
+        returns (
+            IIntegrationManager.SpendAssetsHandleType,
+            address[] memory,
+            uint256[] memory,
+            address[] memory,
+            uint256[] memory
+        );
 
-    /// @dev Helper to decode the _assetData param passed to adapter call
-    function __decodeAssetData(bytes memory _assetData)
+    function __decodeAssetData(bytes calldata _assetData)
         internal
         pure
-        returns (address[] memory spendAssets_, uint256[] memory spendAssetAmounts_, address[] memory incomingAssets_)
+        returns (
+            address[] memory spendAssets,
+            uint256[] memory spendAssetAmounts,
+            address[] memory incomingAssets
+        )
     {
         return abi.decode(_assetData, (address[], uint256[], address[]));
-    }
-
-    ///////////////////
-    // STATE GETTERS //
-    ///////////////////
-
-    /// @notice Gets the `INTEGRATION_MANAGER` variable
-    /// @return integrationManager_ The `INTEGRATION_MANAGER` variable value
-    function getIntegrationManager() external view returns (address integrationManager_) {
-        return INTEGRATION_MANAGER;
     }
 }
