@@ -14,7 +14,8 @@ This document provides a comprehensive guide for developers on integrating, depl
 - [Interacting with the `AaveV3Adapter`](#interacting-with-the-aavev3adapter)
   - [Lending](#lending)
   - [Redeeming](#redeeming)
-- [Use in a Foundry Test Environment](#use-in-a-foundry-test-environment)
+- [End-to-End Workflow: From Deployment to Usage](#end-to-end-workflow-from-deployment-to-usage)
+- [Enhanced Testing Strategy](#enhanced-testing-strategy)
 - [Multi-Network Deployment](#multi-network-deployment)
 - [File Manifest](#file-manifest)
 
@@ -80,13 +81,45 @@ To redeem an underlying asset from Aave V3, a fund manager calls `callOnIntegrat
 - **`_selector`**: The function selector for `redeem(address,bytes,bytes)`.
 - **`_actionData`**: ABI-encoded `(address aToken, uint256 amount)`, where `aToken` is the `aToken` to be spent and `amount` is the amount of the `aToken` to redeem.
 
-## Use in a Foundry Test Environment
+## End-to-End Workflow: From Deployment to Usage
 
-The `AaveV3Adapter` can be tested in a local Foundry environment using mock contracts for its dependencies. The test suite should include:
+To provide a practical, hands-on guide, this package includes advanced Foundry scripts that simulate the entire lifecycle of deploying, configuring, and using the `AaveV3Adapter`.
 
-- A mock `IntegrationManager` to simulate calls from an Enzyme vault.
-- A mock Aave V3 `Pool` to verify that the correct functions are called with the expected parameters.
-- Tests for both `lend` and `redeem` to ensure that asset parsing and interaction logic are working correctly.
+### Step 1: Deploy and Configure the Adapter
+
+The `script/DeployAndConfigureAaveV3Adapter.s.sol` script provides a complete, one-step process for setting up the adapter. It performs the following actions:
+
+1.  **Deploys the `AaveV3Adapter`**: It deploys the main adapter contract using the environment variables you provide.
+2.  **Deploys a Mock Policy**: It deploys a `AllowedAdaptersPolicyMock` to simulate a fund's policy contract.
+3.  **Authorizes the Adapter**: It calls `addAdapters` on the mock policy, whitelisting the newly deployed `AaveV3Adapter`.
+4.  **Verifies the Configuration**: It queries the policy to confirm that the adapter has been successfully authorized.
+
+To run this script, configure your `.env` file and execute:
+`forge script script/DeployAndConfigureAaveV3Adapter.s.sol --rpc-url <your_rpc_url> --broadcast`
+
+### Step 2: Interact with the Adapter
+
+Once the adapter is deployed and authorized, the `script/InteractWithAaveV3Adapter.s.sol` script demonstrates how a fund manager would use it. The script simulates:
+
+1.  **Funding a Mock Fund**: It mints mock underlying tokens to a `ComptrollerProxyMock` to represent a fund's assets.
+2.  **Executing a Lend Operation**: It builds the `callOnIntegration` calldata and executes a `lend` transaction.
+3.  **Executing a Redeem Operation**: It simulates the fund receiving aTokens and then executes a `redeem` transaction.
+
+This script serves as a living example of how to construct the necessary calls to interact with the adapter. To run it, you will need to update your `.env` file with the addresses output by the deployment script, and then execute:
+`forge script script/InteractWithAaveV3Adapter.s.sol --rpc-url <your_rpc_url> --broadcast`
+
+## Enhanced Testing Strategy
+
+The test suite in `tests/tests/AaveV3Adapter.t.sol` has been significantly enhanced to ensure the adapter is robust and reliable. The new strategy includes:
+
+- **Granular Balance Assertions**: Each test now checks the token balances of the vault before and after the `lend` or `redeem` operation to ensure the exact amounts were transferred.
+- **Mock Contract State Verification**: The tests assert that the mock Aave V3 `Pool` has correctly recorded the `supplied` and `withdrawn` amounts.
+- **Failure Condition Tests**: The suite includes dedicated tests for edge cases and invalid inputs, such as:
+    - Attempting to `lend` a zero amount.
+    - Using an `aToken` that is not registered in the `AddressListRegistry`.
+    - Calling `parseAssetsForAction` with an invalid function selector.
+
+This comprehensive approach ensures that the adapter behaves as expected under both normal and exceptional circumstances, providing a high degree of confidence in its correctness.
 
 ## Multi-Network Deployment
 
